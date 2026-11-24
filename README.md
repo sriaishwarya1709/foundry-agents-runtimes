@@ -179,18 +179,31 @@ and capture the `check_invoice` tool call, structured result, and $250 explanati
 
 ### 2. Prompt agent with Copilot harness
 
+The six synthetic input PDFs are included in [samples/invoices](./samples/invoices),
+so you can download them from GitHub and attach them in the Foundry playground:
+
+- [INV-104.pdf](./samples/invoices/INV-104.pdf): amount mismatch, $250 over the PO.
+- [INV-105.pdf](./samples/invoices/INV-105.pdf): missing purchase order.
+- [INV-106.pdf](./samples/invoices/INV-106.pdf): USD/EUR currency mismatch.
+- [INV-107.pdf](./samples/invoices/INV-107.pdf): intentional verification timeout.
+- [INV-108.pdf](./samples/invoices/INV-108.pdf): matching totals.
+- [unreadable-id.pdf](./samples/invoices/unreadable-id.pdf): human review required.
+
+To invoke the agent with these checked-in PDFs:
+
 ```powershell
-python -m invoice_demo.demo pdfs
-python -m invoice_demo.demo invoke invoice-copilot
+python -m invoice_demo.demo invoke invoice-copilot --pdf-dir samples\invoices
 ```
 
-The PDF generator creates five synthetic invoices plus a file with no readable invoice ID.
+To regenerate the same fixture content locally, run `python -m invoice_demo.demo pdfs`.
+That command writes to `demo-output/pdfs`; use `--pdf-dir demo-output\pdfs` to review
+those regenerated copies. Generated responses and reports remain excluded from Git.
 The client attaches PDF content directly, creates an explicit conversation, and uses the
 **agent-scoped** Responses client. A project-level Responses call or `previous_response_id`
 is not supported for this harness.
 
 In the Foundry playground, select `invoice-copilot`, start a new conversation, attach
-all six generated PDFs, and paste:
+all six PDFs from [samples/invoices](./samples/invoices), and paste:
 
 ```text
 Use the invoice-exception-review skill to review every attached invoice PDF.
