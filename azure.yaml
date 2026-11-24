@@ -14,7 +14,7 @@ services:
           version: "2025-08-07"
         sku:
           name: GlobalStandard
-          capacity: 100
+          capacity: 500
   invoice-api:
     project: .
     host: containerapp

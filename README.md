@@ -31,7 +31,7 @@ job blobs, and export telemetry. The project identity is not a substitute for th
 
 Model declarations in `azure.yaml` are read by Bicep at compile time. Change the model
 name/version/SKU/capacity there, then reprovision; don't create a second model deployment manually.
-The default model capacity is 100 units to accommodate the multi-file Copilot review.
+The default model capacity is 500 units to accommodate the multi-file Copilot review.
 This is pay-per-token GlobalStandard capacity, not a provisioned-throughput commitment.
 Reduce it for lighter workloads, but multi-tool reviews can exceed a small allocation.
 
