@@ -150,6 +150,26 @@ only a Container Apps bootstrap image; it is **not** the reconciliation API unti
 
 ### 1. Default prompt agent
 
+In the Foundry playground, select `invoice-prompt` and paste:
+
+```text
+Check invoice INV-104 against its linked purchase order. Use check_invoice as the
+source of truth. Explain the status, invoice and PO totals, currency, and signed
+variance in dollars. State whether human review is required. Do not approve or pay it.
+```
+
+Expected result: `AMOUNT_MISMATCH`, invoice $1,250 vs PO $1,000, **$250 over**.
+Try these additional prompts to capture different exception paths:
+
+| Sample prompt | Expected evidence |
+| --- | --- |
+| Check INV-105 and explain whether its purchase order was found. | `MISSING_PO` |
+| Check INV-106. Explain the currency discrepancy without subtracting unlike currencies. | `CURRENCY_MISMATCH` |
+| Check INV-107. Distinguish unavailable verification from a missing purchase order. | `VERIFICATION_UNAVAILABLE` |
+| Check INV-108. Explain whether the totals match without approving payment. | `MATCH` |
+
+The CLI equivalent for the primary example is:
+
 ```powershell
 python -m invoice_demo.demo invoke invoice-prompt --invoices INV-104
 ```
@@ -169,6 +189,22 @@ The client attaches PDF content directly, creates an explicit conversation, and 
 **agent-scoped** Responses client. A project-level Responses call or `previous_response_id`
 is not supported for this harness.
 
+In the Foundry playground, select `invoice-copilot`, start a new conversation, attach
+all six generated PDFs, and paste:
+
+```text
+Use the invoice-exception-review skill to review every attached invoice PDF.
+Account for all six source filenames, including the file with an unreadable ID.
+Verify each readable invoice ID with check_invoice; do not calculate financial
+comparisons from document text. Keep missing POs, currency mismatches, unavailable
+verification, and unreadable IDs separate. Create invoice-exceptions.csv and
+invoice-exceptions.md for human review, and return both as downloadable Foundry
+Files. Include matching invoices in the report too. Do not approve or pay invoices.
+```
+
+Expected result: six report rows covering `INV-104.pdf` through `INV-108.pdf` and
+`unreadable-id.pdf`, plus downloadable CSV and Markdown file references.
+
 Capture the harness selection, attached `invoice-exception-review` skill, file operations,
 tool calls, and downloaded exception reports. Confirm all **six filenames** appear.
 The timeout must be separate from missing PO evidence. Capture the returned Foundry
@@ -178,6 +214,21 @@ If file upload fails with 403, check the Copilot **instance identity** role assi
 wait for propagation, and retry in a new conversation.
 
 ### 3. Hosted batch and recovery
+
+The hosted handler accepts a **JSON job**, not a natural-language prompt. Select
+`invoice-hosted` and send the following JSON as the message text, or use the CLI below:
+
+```json
+{
+  "job_id": "blog-nightly-01",
+  "invoice_ids": ["INV-104", "INV-105", "INV-106", "INV-108"]
+}
+```
+
+Expected result: durable per-invoice checkpoints and one committed reviewer report.
+Resubmit the exact same JSON to demonstrate report reuse. Use a new job ID for a
+different ordered invoice list. The hosted demo requires working checkpoint-storage
+connectivity; organizational network policy can block it even when the agent is active.
 
 ```powershell
 python -m invoice_demo.demo invoke invoice-hosted --job-id blog-nightly-01
@@ -190,6 +241,19 @@ Invoke again with the same job ID and invoice list. The committed report is reus
 Changing a job's invoice list is rejected. Default successful batches omit `INV-107`:
 that fixture intentionally always times out. Add it to demonstrate bounded retries;
 the failing invoice and final report remain uncommitted, while prior checkpoints survive.
+
+For the intentional timeout/retry scenario, use a separate job:
+
+```json
+{
+  "job_id": "blog-timeout-01",
+  "invoice_ids": ["INV-104", "INV-107"]
+}
+```
+
+Expected result: `INV-104` is checkpointed, but `INV-107` exhausts bounded retries.
+The response fails explicitly and no final report is committed. This is not the
+successful-batch example.
 
 For a quick **application-checkpoint** restart demonstration without Azure/model calls:
 
