@@ -181,7 +181,7 @@ The deployed API must be reachable by Foundry. The initial infrastructure image 
 only a Container Apps bootstrap image; it is **not** the reconciliation API until
 `azd deploy invoice-api` succeeds. The deployment script verifies the dataset fingerprint.
 
-## Invoke and capture blog examples
+## Invoke the sample agents
 
 ### 1. Default prompt agent
 
@@ -310,7 +310,7 @@ The hosted handler accepts a **JSON job**, not a natural-language prompt. Select
 
 ```json
 {
-  "job_id": "blog-nightly-01",
+  "job_id": "invoice-batch-01",
   "invoice_ids": ["INV-104", "INV-105", "INV-106", "INV-108"]
 }
 ```
@@ -321,9 +321,9 @@ different ordered invoice list. The hosted demo requires working checkpoint-stor
 connectivity; organizational network policy can block it even when the agent is active.
 
 ```powershell
-python -m invoice_demo.demo invoke invoice-hosted --job-id blog-nightly-01
+python -m invoice_demo.demo invoke invoice-hosted --job-id invoice-batch-01
 python -m invoice_demo.demo response "<returned-response-id>"
-python -m invoice_demo.demo report blog-nightly-01
+python -m invoice_demo.demo report invoice-batch-01
 ```
 
 The invocation uses `background=true` and `store=true`; polling reports the real status.
@@ -336,7 +336,7 @@ For the intentional timeout/retry scenario, use a separate job:
 
 ```json
 {
-  "job_id": "blog-timeout-01",
+  "job_id": "invoice-timeout-01",
   "invoice_ids": ["INV-104", "INV-107"]
 }
 ```
@@ -370,57 +370,6 @@ job ID and immutable invoice list. Foundry hosts the handler; application code o
 retries, checkpoints, the manifest invariant, and duplicate-safe report writes.
 Concurrent attempts can repeat a read or model draft, but Blob's conditional create
 commits only one report. This is not an exactly-once guarantee for arbitrary external actions.
-
-## Application Insights screenshots
-
-The [screenshots.kql](./docs/screenshots.kql) file contains **three separate, read-only
-Kusto Query Language queries**. It reads telemetry already stored in Application
-Insights; it does not invoke agents, create reports, schedule jobs, or enable tracing.
-
-1. Invoke the scenario you want to capture. Hosted checkpoints/recovery require
-   working Blob connectivity; agent activation alone is insufficient.
-2. Open the deployed `appi-*` **Application Insights component** in the Azure portal,
-   select **Logs**, and use the full KQL editor.
-3. Select and run **one query block at a time**. All three filter to the last hour;
-   change `ago(1h)` to `ago(24h)` if you need older results.
-
-These queries use Application Insights component table/column names:
-`dependencies`, `traces`, `timestamp`, and `customDimensions`. At Log Analytics
-workspace scope the equivalents include `AppDependencies`, `AppTraces`,
-`TimeGenerated`, and `Properties`; do not paste the component queries unchanged there.
-
-| Query | What it shows | Useful screenshot |
-| --- | --- | --- |
-| 1. Custom spans | Individual tool, batch, invoice, report, and model-summary operations | Invoice status, checkpoint reuse, report creation, and correlated operation IDs |
-| 2. Latency summary | Call count, average duration, and p95 duration per operation name | Deterministic API checks versus model-summary and whole-batch latency |
-| 3. Diagnostic logs | Application messages about checks, unavailable verification, batch progress, and hosted entry | Explicit timeout/retry messages and job progress, when log export is available |
-
-In query 1, `invoice` and `status` come from the span's custom attributes. `job`
-identifies a hosted batch; `operation_Id` identifies a technical trace. Fields can
-be blank on span types that do not emit them; that is normal.
-
-- **`success` is technical success**, not invoice approval or a `MATCH` verdict.
-  A completed API call can successfully return `AMOUNT_MISMATCH`, `MISSING_PO`, or
-  `VERIFICATION_UNAVAILABLE`. Read the `status` field for the business outcome.
-- **`checkpoint_reused=true`** means a saved invoice result was reused during a
-  resumed partial job. It does not, by itself, prove Foundry process-loss recovery.
-- **`platform_recovery`** comes from `context.is_recovery` on the hosted batch span.
-  A normal repeat request is not necessarily a platform recovery.
-- **`report_created=true`** marks an attempt that committed the atomic report;
-  `false` marks reuse after a concurrent create. Telemetry alone is not proof of
-  exactly-once external actions. Inspect the stored report when validating persistence.
-- **p95** is the duration at or below which approximately 95% of observed calls
-  completed. It is not a quality score, token count, or cost measurement.
-
-Correlate API and hosted spans by `operation_Id`. Open a transaction to inspect child
-spans and events; use `job` to compare separate attempts for the same hosted job.
-Prompt-agent tool traces in Foundry complement the API spans; do not
-assume every runtime exports identical span names or that provisioning proves ingestion.
-Telemetry may take several minutes to appear. Missing data requires checking identity
-RBAC, exporter logs, component/workspace query access, and actual invocation completion.
-Custom exporters resolve App Insights metadata using the scoped Reader role and
-ingest using Monitoring Metrics Publisher. The hosted exporter is initialized on the
-first invocation, after instance RBAC exists, and reuses AgentServer's trace provider.
 
 ## Verification boundaries
 
