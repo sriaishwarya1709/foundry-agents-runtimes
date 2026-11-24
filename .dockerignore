@@ -1,0 +1,13 @@
+.azure
+.venv
+.git
+.env
+.env.*
+.pytest_cache
+.ruff_cache
+*.egg-info
+.foundry
+__pycache__
+demo-output
+tests
+.copilot

@@ -1,0 +1,12 @@
+.azure/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+.env
+.foundry/
+demo-output/
+infra/main.json
+infra/agent-access.json

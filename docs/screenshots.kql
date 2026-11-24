@@ -1,0 +1,24 @@
+// Application Insights Logs (component scope). Telemetry can take several minutes to arrive.
+dependencies
+| where timestamp > ago(1h)
+| where name in ("check_invoice", "invoice.batch", "batch.invoice", "batch.report", "batch.model_summary")
+| project timestamp, name, duration, success, operation_Id,
+    invoice=tostring(customDimensions["invoice.id"]),
+    status=tostring(customDimensions["invoice.status"]),
+    job=tostring(customDimensions["job.id"]),
+    checkpoint_reused=tostring(customDimensions["checkpoint.reused"]),
+    report_created=tostring(customDimensions["report.created"])
+| order by timestamp desc
+
+// Run as a separate query to compare latency.
+dependencies
+| where timestamp > ago(1h)
+| where name in ("check_invoice", "invoice.batch", "batch.model_summary")
+| summarize calls=count(), average=avg(duration), p95=percentile(duration, 95) by name
+
+// Run as a separate query: explicit API/verification diagnostics.
+traces
+| where timestamp > ago(1h)
+| where message has "check_invoice" or message has "Verification unavailable" or message has "Batch progress"
+| project timestamp, severityLevel, message, operation_Id
+| order by timestamp desc
