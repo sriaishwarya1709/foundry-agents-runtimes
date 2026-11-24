@@ -13,6 +13,40 @@ The Copilot harness is a runtime choice for a **prompt agent**, not a third agen
 All financial comparisons use shared business code and integer minor units, never model arithmetic.
 There are no approval/payment endpoints or permissions.
 
+## How the components work
+
+```text
+Foundry prompt / Copilot agents
+  -> OpenAPI tool -> FastAPI API on Container Apps -> synthetic invoice/PO records
+
+Foundry hosted Python agent
+  -> HTTP client -> the same FastAPI API
+  -> Blob checkpoints + Foundry model summary -> stored reviewer report
+```
+
+- **Foundry hosts all three agents.** The Copilot harness is operated by Foundry;
+  it is not deployed to the Container App.
+- **Container Apps hosts `invoice-api`.** This custom [FastAPI application](./invoice_demo/api.py)
+  exposes `GET /invoices/{invoice_id}/check`. Container Apps supplies the HTTPS
+  endpoint and container hosting. It is a hosting choice, not a Foundry requirement.
+- **OpenAPI describes the API; it is not a separate reconciliation service.**
+  The definition in [azure.yaml](./azure.yaml) tells the prompt agents how to call
+  `check_invoice`. `&invoice-tool` defines a YAML anchor and `*invoice-tool` reuses
+  that configuration for the Copilot agent. The hosted code calls the API directly.
+- **The skill supplies instructions.** [invoice-exception-review](./procedures/invoice-exception-review/SKILL.md)
+  guides PDF handling and reporting; it is not another model or data source.
+- **The financial data is synthetic and hard-coded** in
+  [reconciliation.py](./invoice_demo/reconciliation.py), not fetched from an ERP.
+  The default agent gets an invoice ID from your prompt; the Copilot agent reads it
+  from a PDF. The API looks up that ID and compares the stored invoice and PO records.
+
+For example, `INV-106` points to a USD 900 invoice and `PO-502`, an EUR 900 purchase
+order. The API returns `CURRENCY_MISMATCH` without subtracting the amounts.
+Changing a PDF's total does not change the API's stored records. This demo uses the
+PDF to identify an invoice, not to independently validate every value printed on it.
+An unknown valid invoice ID returns `MISSING_INVOICE`. Do not upload real customer
+invoices to this synthetic, public-network demo.
+
 ## Infrastructure
 
 `infra/main.bicep` creates a resource group and deploys `infra/resources.bicep`:
@@ -123,7 +157,8 @@ This step creates billable Azure resources. Review the templates first.
 ```
 
 The script provisions Bicep, deploys the API, verifies the exact $250 tool result,
-publishes the skill and pins its returned immutable version, deploys the three agents,
+publishes the skill and checks its immutable version against the literal pin in
+`azure.yaml`, deploys the three agents,
 then applies the second Bicep template for instance-identity RBAC. Allow up to five
 minutes for role propagation before invoking the agents.
 
@@ -226,6 +261,48 @@ file references; a sandbox path alone does not prove a durable report was upload
 If file upload fails with 403, check the Copilot **instance identity** role assignment,
 wait for propagation, and retry in a new conversation.
 
+#### Where the input and output files live
+
+| Files | Location |
+| --- | --- |
+| Six synthetic input PDFs | [samples/invoices](./samples/invoices), included in GitHub |
+| Copilot-generated CSV and Markdown reports | Foundry Files; the response returns file IDs/citations |
+| Locally saved responses and downloaded reports | `demo-output/`, excluded from Git |
+| Hosted job manifests, checkpoints, and final JSON report | The private `invoice-jobs` Blob container |
+
+Foundry Files and the hosted checkpoint container are separate stores. Workspace
+paths alone are not durable downloads. If a portal attachment does not download,
+the file may still exist: inspect the browser request rather than assuming upload
+failed. You can download it with the **project-scoped** Files client below.
+Keep agent-scoped clients for Copilot Responses calls, not these Files calls.
+
+After loading the deployment environment with `scripts/load-env.ps1`, run this Python
+example with the file IDs returned by your response:
+
+```python
+import os
+from pathlib import Path
+
+from azure.ai.projects import AIProjectClient
+from azure.identity import DefaultAzureCredential
+
+directory = Path("demo-output/reports")
+directory.mkdir(parents=True, exist_ok=True)
+with DefaultAzureCredential() as credential:
+    with AIProjectClient(
+        endpoint=os.environ["AZURE_AI_PROJECT_ENDPOINT"],
+        credential=credential,
+        allow_preview=True,
+    ) as project:
+        with project.get_openai_client() as client:
+            for file_id, filename in [
+                ("<csv-file-id>", "invoice-exceptions.csv"),
+                ("<markdown-file-id>", "invoice-exceptions.md"),
+            ]:
+                content = client.files.content(file_id).read()
+                (directory / filename).write_bytes(content)
+```
+
 ### 3. Hosted batch and recovery
 
 The hosted handler accepts a **JSON job**, not a natural-language prompt. Select
@@ -296,23 +373,69 @@ commits only one report. This is not an exactly-once guarantee for arbitrary ext
 
 ## Application Insights screenshots
 
-Open the `appi-*` resource in the Azure portal. In **Logs**, run the queries in
-`docs/screenshots.kql` individually at Application Insights component scope.
+The [screenshots.kql](./docs/screenshots.kql) file contains **three separate, read-only
+Kusto Query Language queries**. It reads telemetry already stored in Application
+Insights; it does not invoke agents, create reports, schedule jobs, or enable tracing.
 
-1. `check_invoice` spans: amount mismatch, missing PO, currency mismatch, and unavailable verification.
-2. Hosted transaction: `invoice.batch`, `batch.invoice`, `batch.model_summary`, and `batch.report`.
-3. Recovery: `checkpoint.reused=true` and the stable `job.id`.
-4. Duplicate safety: exactly one `report.created=true` span per completed job.
-5. Latency: model summary vs deterministic financial tool execution.
+1. Invoke the scenario you want to capture. Hosted checkpoints/recovery require
+   working Blob connectivity; agent activation alone is insufficient.
+2. Open the deployed `appi-*` **Application Insights component** in the Azure portal,
+   select **Logs**, and use the full KQL editor.
+3. Select and run **one query block at a time**. All three filter to the last hour;
+   change `ago(1h)` to `ago(24h)` if you need older results.
+
+These queries use Application Insights component table/column names:
+`dependencies`, `traces`, `timestamp`, and `customDimensions`. At Log Analytics
+workspace scope the equivalents include `AppDependencies`, `AppTraces`,
+`TimeGenerated`, and `Properties`; do not paste the component queries unchanged there.
+
+| Query | What it shows | Useful screenshot |
+| --- | --- | --- |
+| 1. Custom spans | Individual tool, batch, invoice, report, and model-summary operations | Invoice status, checkpoint reuse, report creation, and correlated operation IDs |
+| 2. Latency summary | Call count, average duration, and p95 duration per operation name | Deterministic API checks versus model-summary and whole-batch latency |
+| 3. Diagnostic logs | Application messages about checks, unavailable verification, batch progress, and hosted entry | Explicit timeout/retry messages and job progress, when log export is available |
+
+In query 1, `invoice` and `status` come from the span's custom attributes. `job`
+identifies a hosted batch; `operation_Id` identifies a technical trace. Fields can
+be blank on span types that do not emit them; that is normal.
+
+- **`success` is technical success**, not invoice approval or a `MATCH` verdict.
+  A completed API call can successfully return `AMOUNT_MISMATCH`, `MISSING_PO`, or
+  `VERIFICATION_UNAVAILABLE`. Read the `status` field for the business outcome.
+- **`checkpoint_reused=true`** means a saved invoice result was reused during a
+  resumed partial job. It does not, by itself, prove Foundry process-loss recovery.
+- **`platform_recovery`** comes from `context.is_recovery` on the hosted batch span.
+  A normal repeat request is not necessarily a platform recovery.
+- **`report_created=true`** marks an attempt that committed the atomic report;
+  `false` marks reuse after a concurrent create. Telemetry alone is not proof of
+  exactly-once external actions. Inspect the stored report when validating persistence.
+- **p95** is the duration at or below which approximately 95% of observed calls
+  completed. It is not a quality score, token count, or cost measurement.
 
 Correlate API and hosted spans by `operation_Id`. Open a transaction to inspect child
-spans and events. Prompt-agent tool traces in Foundry complement the API spans; do not
+spans and events; use `job` to compare separate attempts for the same hosted job.
+Prompt-agent tool traces in Foundry complement the API spans; do not
 assume every runtime exports identical span names or that provisioning proves ingestion.
 Telemetry may take several minutes to appear. Missing data requires checking identity
 RBAC, exporter logs, component/workspace query access, and actual invocation completion.
 Custom exporters resolve App Insights metadata using the scoped Reader role and
 ingest using Monitoring Metrics Publisher. The hosted exporter is initialized on the
 first invocation, after instance RBAC exists, and reuses AgentServer's trace provider.
+
+## Verification boundaries
+
+In the reference run on 2026-11-24, 17 local tests passed, the prompt agent returned the
+expected $250 discrepancy, and the Copilot agent produced downloadable reports covering
+all six PDFs. Stored Application Insights spans were also confirmed.
+
+The hosted agent deployed and became active, but end-to-end cloud checkpoint writes
+were blocked by an organizational policy disabling storage public network access.
+An approved private-network connection is required in that environment. The local
+checkpoint/restart demo was exercised; Foundry process-loss recovery was not verified.
+
+These are reference-run results, not guarantees for another subscription. Validate
+model/runtime availability, networking, identity permissions, and live behavior in
+your own environment before presenting the sample as a working production solution.
 
 ## Cleanup
 
