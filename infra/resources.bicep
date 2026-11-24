@@ -243,6 +243,15 @@ resource developerRegistryRole 'Microsoft.Authorization/roleAssignments@2022-04-
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8311e382-0749-4cb8-b61a-304f252e45ec')
   }
 }
+resource developerRegistryBuildRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: registry
+  name: guid(registry.id, principalId, 'acr-tasks-contributor')
+  properties: {
+    principalId: principalId
+    principalType: principalType
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'fb382eab-e894-4461-af04-94435c366c3f')
+  }
+}
 resource projectRegistryRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: registry
   name: guid(registry.id, project.id, acrPull)

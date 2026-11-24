@@ -14,14 +14,15 @@ services:
           version: "2025-08-07"
         sku:
           name: GlobalStandard
-          capacity: 10
+          capacity: 100
   invoice-api:
     project: .
     host: containerapp
-    language: python
+    language: docker
     docker:
       path: Dockerfile.api
       context: .
+      remoteBuild: true
   invoice-prompt:
     host: azure.ai.agent
     uses: [ai-project, invoice-api]
@@ -91,7 +92,7 @@ services:
       type: microsoft_copilot_preview
     skills:
       - name: invoice-exception-review
-        version: ${INVOICE_SKILL_VERSION}
+        version: "1"
     instructions: |
       Review attached invoice files using the invoice-exception-review skill.
       Account for every source file, including unreadable or ambiguous IDs.

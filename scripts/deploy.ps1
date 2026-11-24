@@ -19,10 +19,9 @@ function Invoke-Checked {
     }
 }
 
-foreach ($tool in @('az', 'azd', 'docker')) {
+foreach ($tool in @('az', 'azd', 'python')) {
     Get-Command $tool -ErrorAction Stop | Out-Null
 }
-Invoke-Checked docker @('info', '--format', '{{.ServerVersion}}')
 Invoke-Checked az @('account', 'show', '--subscription', $SubscriptionId, '--output', 'none')
 Invoke-Checked azd @('auth', 'login', '--check-status')
 
@@ -41,11 +40,11 @@ Invoke-Checked azd @('provision', '--no-prompt')
 $values = Invoke-Checked azd @('env', 'get-values', '--output', 'json') | ConvertFrom-Json
 
 Invoke-Checked azd @('deploy', 'invoice-api', '--no-prompt')
-$health = Invoke-RestMethod "$($values.INVOICE_API_ENDPOINT)/health"
+$health = Invoke-RestMethod "$($values.INVOICE_API_ENDPOINT)/health" -TimeoutSec 60
 if ($health.dataset -ne 'synthetic-invoices-v1') {
     throw 'The invoice API is not running the expected demo image'
 }
-$evidence = Invoke-RestMethod "$($values.INVOICE_API_ENDPOINT)/invoices/INV-104/check"
+$evidence = Invoke-RestMethod "$($values.INVOICE_API_ENDPOINT)/invoices/INV-104/check" -TimeoutSec 60
 if ($evidence.status -ne 'AMOUNT_MISMATCH' -or $evidence.variance_minor_units -ne 25000) {
     throw 'The invoice API did not return the expected $250 discrepancy'
 }
@@ -54,13 +53,19 @@ $skillCommand = 'create'
 if ($UpdateSkill) { $skillCommand = 'update' }
 $skill = Invoke-Checked azd @(
     'ai', 'skill', $skillCommand, 'invoice-exception-review',
-    '--file', (Join-Path (Get-Location) 'skills\invoice-exception-review'),
+    '--file', (Join-Path (Get-Location) 'procedures\invoice-exception-review'),
     '--project-endpoint', $values.AZURE_AI_PROJECT_ENDPOINT, '--output', 'json'
 ) | ConvertFrom-Json
 if (-not $skill.version -or "$($skill.version)" -notmatch '^[1-9][0-9]*$') {
     throw 'Skill publication did not return an immutable positive version'
 }
-Invoke-Checked azd @('env', 'set', 'INVOICE_SKILL_VERSION', "$($skill.version)")
+$pinnedVersion = Invoke-Checked python @(
+    '-c',
+    "import yaml; print(yaml.safe_load(open('azure.yaml', encoding='utf-8'))['services']['invoice-copilot']['skills'][0]['version'])"
+)
+if ("$($skill.version)" -ne "$pinnedVersion") {
+    throw "Skill version $($skill.version) was published. Set invoice-copilot.skills[0].version in azure.yaml to `"$($skill.version)`" before deploying. azd does not expand environment variables in skill versions."
+}
 foreach ($agent in @('invoice-prompt', 'invoice-copilot', 'invoice-hosted')) {
     Invoke-Checked azd @('deploy', $agent, '--no-prompt')
 }
@@ -94,6 +99,15 @@ Invoke-Checked az @(
     '--output', 'none'
 )
 
+$storageNetwork = Invoke-Checked az @(
+    'storage', 'account', 'show', '--subscription', $SubscriptionId,
+    '--resource-group', $values.AZURE_RESOURCE_GROUP,
+    '--name', $values.CHECKPOINT_STORAGE_ACCOUNT_NAME,
+    '--query', 'publicNetworkAccess', '--output', 'tsv'
+)
+if ($storageNetwork -ne 'Enabled') {
+    throw 'The agents were deployed, but checkpoint storage public network access is disabled. This hosted demo requires an approved private-network connection; do not override organizational policy.'
+}
 Write-Host 'Provisioning, API smoke check, skill publication, agent deployment, and RBAC completed.'
 Write-Host 'Allow up to five minutes for RBAC propagation before invoking the agents.'
 Write-Host 'Load the azd environment into your shell using scripts\load-env.ps1.'

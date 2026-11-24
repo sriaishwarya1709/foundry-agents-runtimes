@@ -31,6 +31,9 @@ job blobs, and export telemetry. The project identity is not a substitute for th
 
 Model declarations in `azure.yaml` are read by Bicep at compile time. Change the model
 name/version/SKU/capacity there, then reprovision; don't create a second model deployment manually.
+The default model capacity is 100 units to accommodate the multi-file Copilot review.
+This is pay-per-token GlobalStandard capacity, not a provisioned-throughput commitment.
+Reduce it for lighter workloads, but multi-tool reviews can exceed a small allocation.
 
 **Demo security and cost:** this is a public-network sample, not production infrastructure.
 The anonymous API exposes only fixed synthetic records and no write operations.
@@ -47,8 +50,15 @@ The Foundry service's own trace-content policies still apply.
 
 ## Prerequisites
 
-- Python **3.13**, Azure CLI, Azure Developer CLI **1.37+**, Docker with Linux containers running.
+- Python **3.13**, Azure CLI, and Azure Developer CLI **1.37+**.
   On Windows ARM64, use x64 Python if a native dependency has no ARM64 wheel.
+  The API image is built remotely using ACR Tasks; local Docker is not required.
+  Bicep grants the developer scoped ACR push and Tasks Contributor roles for that build.
+  The Copilot review procedure lives under `procedures/` to avoid CLI auto-discovery
+  attaching it to the ordinary prompt agent. It is published separately and version-pinned.
+  Skill versions must be literal strings in `azure.yaml`; the current CLI does not
+  expand environment variables there. After publishing an updated skill, change its
+  pinned version before redeploying the Copilot agent.
 - Install extensions: `azd extension install microsoft.foundry` and
   `azd extension install azure.ai.evaluations`.
 - Sign in yourself: `az login` and `azd auth login`.
@@ -117,11 +127,20 @@ publishes the skill and pins its returned immutable version, deploys the three a
 then applies the second Bicep template for instance-identity RBAC. Allow up to five
 minutes for role propagation before invoking the agents.
 
-For subsequent deployments, use `-UpdateSkill` to publish a new skill version:
+For subsequent skill changes, use `-UpdateSkill` to publish a new immutable version:
 
 ```powershell
 .\scripts\deploy.ps1 -SubscriptionId "<your-subscription-guid>" -UpdateSkill
 ```
+If the returned version differs from the literal pin, the script stops with instructions.
+Update `invoice-copilot.skills[0].version` in `azure.yaml`, then run
+`azd deploy invoice-copilot --no-prompt` to attach that version.
+
+Some enterprise policies force checkpoint storage public network access off even when
+the template requests it enabled. This public-network sample cannot reach that storage
+from the hosted agent without an approved private-network connection. Do not exempt or
+disable governance policies to make the demo work. Agent activation alone does not prove
+the hosted batch can read and write checkpoints.
 
 The deployed API must be reachable by Foundry. The initial infrastructure image is
 only a Container Apps bootstrap image; it is **not** the reconciliation API until
